@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<title>Web Audio Visualizer</title>
+	<link href='https://fonts.googleapis.com/css?family=Oswald' rel='stylesheet' type='text/css'>
+	<style>
+	body {
+         background: #111;
+		 color: ghostwhite;
+         font-family: tahoma, verdana, sans serif;
+    }
+
+	#wrapper{
+		width: 640px;
+		margin: 0 auto;
+	}
+	h1{
+		font-family: 'Oswald', sans-serif;
+		margin: 0 auto;
+		float: left;
+	}
+	
+	h3{
+		margin-bottom: 15px;
+	}
+	
+	h4{
+		float: right;
+		margin-bottom: 2px;
+	}
+	
+    canvas {
+		background: black;
+    }
+      
+    #controls{
+      	margin-left:10px;
+        margin-top:10px;
+    }
+	</style>
+	<script>
+	// An IIFE ("Iffy") - see the notes in mycourses
+	(function(){
+		"use strict";
+		
+		var NUM_SAMPLES = 256;
+		var SOUND_1 = 'media/Heart Beat.mp3';
+		var SOUND_2 = 'media/Kinetic Harvest.mp3';
+		var audioElement;
+		var analyserNode;
+		var delayNode;
+		var canvas,ctx;
+		var tintRed = false, tintGreen = false, tintBlue = false;
+		var drawnCurves = true, drawnLines = true, drawnPulses = true;
+		var signpostArray = [];
+		var signpostVelocity = [];
+		var signpostThickness = [];
+		var signpostType = 1;//circles, squares
+		var signpostInitialRadius = 40;
+		var signpostLastFrameAverage = 1000;
+		var signpostFocusX;
+		var signpostFocusY;
+		var ctrlModAX;
+		var ctrlModAY;
+		var ctrlModBX;
+		var ctrlModBY;
+		var activeShape = 'circle';
+		var activeAudioProcessing = 'frequency';
+		var modificationNode;
+		var brightnessModifier = 50;
+		
+		function init(){
+			// set up canvas stuff
+			canvas = document.querySelector('canvas');
+			ctx = canvas.getContext("2d");
+			
+			//set focus of the canvas elements
+			signpostFocusX = canvas.width/2;
+			signpostFocusY = canvas.height/2;
+			
+			//setting initial control point values
+			randomizeControlPoints();
+			
+			// get reference to <audio> element on page
+			audioElement = document.querySelector('audio');
+			
+			// call our helper function and get an analyser node
+			analyserNode = createWebAudioContextWithAnalyserNode(audioElement);
+			
+			// get sound track <select> and Full Screen button working
+			setupUI();
+			
+			canvas.onmousedown = doMousedown;
+			
+			// load and play default sound into audio element
+			playStream(audioElement,SOUND_1);
+			
+			
+			ctx.strokeStyle = 'white';
+			ctx.lineWidth = 2;
+			
+			// start animation loop
+			update();
+		}
+		
+		
+		function createWebAudioContextWithAnalyserNode(audioElement) {
+			var audioCtx, analyserNode, sourceNode;
+			// create new AudioContext
+			// The || is because WebAudio has not been standardized across browsers yet
+			// http://webaudio.github.io/web-audio-api/#the-audiocontext-interface
+			audioCtx = new (window.AudioContext || window.webkitAudioContext);
+			
+			// create an analyser node
+			analyserNode = audioCtx.createAnalyser();
+			
+			// fft stands for Fast Fourier Transform
+			analyserNode.fftSize = NUM_SAMPLES;
+			
+			//delay node
+			delayNode = audioCtx.createDelay();
+			delayNode.delayTime.value = 0;
+			
+			// this is where we hook up the <audio> element to the analyserNode
+			sourceNode = audioCtx.createMediaElementSource(audioElement); 
+			
+			sourceNode.connect(audioCtx.destination);
+			sourceNode.connect(delayNode);
+			delayNode.connect(analyserNode);
+			analyserNode.connect(audioCtx.destination);
+			
+			return analyserNode;
+		}
+		
+		function setupUI(){
+			document.querySelector("#trackSelect").onchange = function(e){
+				playStream(audioElement,e.target.value);
+			};
+			
+			document.querySelector("#shapeSelect").onchange = function(e){
+				activeShape = e.target.value;
+			};
+			
+			document.querySelector("#audioSelect").onchange = function(e){
+				activeAudioProcessing = e.target.value;
+			};
+			
+			document.querySelector("#fsButton").onclick = function(){
+				requestFullscreen(canvas);
+			};
+			
+			document.querySelector("#brightnessSlider").onchange = function(e){
+				brightnessModifier = e.target.value;
+			};
+			
+			document.querySelector("#reverbSlider").onchange = function(e){
+				delayNode.delayTime.value = e.target.value/100;
+			};
+			
+			document.getElementById('checkboxTintRed').onchange = function(e){
+				if( e.target.checked){
+					tintRed = true;
+				}
+				else{
+					tintRed = false;
+				}
+			};
+			document.getElementById('checkboxTintGreen').onchange = function(e){
+				if( e.target.checked){
+					tintGreen = true;
+				}
+				else{
+					tintGreen = false;
+				}
+			};
+			document.getElementById('checkboxTintBlue').onchange = function(e){
+				if( e.target.checked){
+					tintBlue = true;
+				}
+				else{
+					tintBlue = false;
+				}
+			};
+			
+			document.getElementById('checkboxCurves').onchange = function(e){
+				if( e.target.checked){
+					drawnCurves = true;
+				}
+				else{
+					drawnCurves = false;
+				}
+			};
+			document.getElementById('checkboxLines').onchange = function(e){
+				if( e.target.checked){
+					drawnLines = true;
+				}
+				else{
+					drawnLines = false;
+				}
+			};
+			document.getElementById('checkboxPulses').onchange = function(e){
+				if( e.target.checked){
+					drawnPulses = true;
+				}
+				else{
+					drawnPulses = false;
+				}
+			};
+		}
+		
+		function playStream(audioElement,path){
+			audioElement.src = path;
+			audioElement.play();
+			audioElement.volume = 1;
+			document.querySelector('#status').innerHTML = "Now playing: " + path;
+		}
+		
+		function update() { 
+			// this schedules a call to the update() method in 1/60 seconds
+			requestAnimationFrame(update);
+			
+			/*
+				Nyquist Theorem
+				http://whatis.techtarget.com/definition/Nyquist-Theorem
+				The array of data we get back is 1/2 the size of the sample rate 
+			*/
+			
+			// create a new array of 8-bit integers (0-255)
+			var data = new Uint8Array(NUM_SAMPLES/2); 
+			
+			// populate the array with the frequency data
+			// notice these arrays can be passed "by reference" 
+			if(activeAudioProcessing == 'frequency'){
+				analyserNode.getByteFrequencyData(data);
+			}
+			else{
+				analyserNode.getByteTimeDomainData(data); // waveform data
+			}
+			
+			// DRAW!
+			ctx.clearRect(0,0,800,600);
+			
+			//calculate the average of the data per frame
+			var averageData = 0;
+			for(var i = 0; i < data.length; i++){
+				averageData += data[i];
+			}
+			averageData /= data.length;
+			
+			//has the threshold of average data been passed?
+			var triggered = false;
+			if(averageData - signpostLastFrameAverage > 2.5){
+				signpostArray.push(signpostInitialRadius);
+				signpostVelocity.push(1);
+				signpostThickness.push(1.1);
+				triggered = true;
+				randomizeControlPoints();
+			}
+			signpostLastFrameAverage = averageData;
+			
+			//create dynamic gradient
+			var fadeGrad=ctx.createRadialGradient(signpostFocusX,signpostFocusY,0,signpostFocusX,signpostFocusY,canvas.height/2);
+			fadeGrad.addColorStop(0,"#1A1A1A");
+			fadeGrad.addColorStop(1,"white");
+			ctx.strokeStyle = fadeGrad;
+			
+			//draw pulsing lines backdrop
+			if(drawnLines){
+				drawPulsingLines(averageData);
+			}
+			
+			//draw curves
+			if(drawnCurves){
+				drawCurves();
+			}
+			
+			//draw zooming circles
+			if(drawnPulses){
+				ctx.save();
+				for(var i = 0; i < signpostArray.length; i++){				
+					ctx.lineWidth = signpostThickness[i];
+					signpostThickness[i] += signpostThickness[i]/25;
+					
+					if(activeShape == 'circle'){
+						ctx.beginPath();
+						ctx.arc(signpostFocusX, signpostFocusY, signpostArray[i], 0, 2 * Math.PI, false);
+						ctx.stroke();
+					}
+					else{
+						ctx.beginPath();
+						ctx.rect(signpostFocusX - signpostArray[i], signpostFocusY - signpostArray[i], signpostArray[i]*2, signpostArray[i]*2);
+						ctx.stroke();
+					}
+					
+					signpostArray[i] += signpostVelocity[i];
+					signpostVelocity[i] += signpostVelocity[i]/20;
+					//cleanup circles larger than the canvas can see
+					if(signpostArray[i] > canvas.width * 1.5){
+						delete signpostArray[i];
+						delete signpostVelocity[i];
+						delete signpostThickness[i];
+						i--;
+					}
+				}
+				ctx.restore();
+			}
+			
+			
+			manipulatePixels();
+		} 
+		
+		//draw functions
+		function drawCurves(){
+			ctx.save();
+			ctx.lineWidth = 1;
+			var distanceFromCenter = signpostArray[signpostArray.length - 1];
+			ctx.beginPath();
+			ctx.moveTo(signpostFocusX - distanceFromCenter, signpostFocusY);
+			ctx.bezierCurveTo(signpostFocusX + ctrlModAX, signpostFocusY + ctrlModAY, signpostFocusX + ctrlModBX, signpostFocusY + ctrlModBY, signpostFocusX + distanceFromCenter, signpostFocusY);
+			ctx.stroke();
+			
+			ctx.beginPath();
+			ctx.moveTo(signpostFocusX, signpostFocusY + distanceFromCenter);
+			ctx.bezierCurveTo(signpostFocusX + ctrlModAX, signpostFocusY + ctrlModAY, signpostFocusX + ctrlModBX, signpostFocusY + ctrlModBY, signpostFocusX, signpostFocusY - distanceFromCenter);
+			ctx.stroke();
+			ctx.restore();
+		}
+		function drawPulsingLines(averageData){
+			ctx.save();
+			ctx.globalAlpha = (getBalancedAverage(averageData));
+			ctx.lineWidth = 2;
+			for(var i = 0; i < 360; i += 30){
+				ctx.beginPath();
+				ctx.moveTo(signpostFocusX + signpostArray[signpostArray.length-1] * Math.cos(i * (Math.PI/180)), signpostFocusY + signpostArray[signpostArray.length-1] * Math.sin(i * (Math.PI/180)));
+				ctx.lineTo(signpostFocusX + canvas.width * 1.5 * Math.cos(i * (Math.PI/180)), signpostFocusY + canvas.width * 1.5 * Math.sin(i * (Math.PI/180)));
+				ctx.stroke();
+			}
+			ctx.globalAlpha = 1;
+			ctx.restore();
+		}
+		
+		
+		// HELPER
+		function manipulatePixels(){
+			//get all of the rgba pixel data of the canvas by grabbing ImageData object
+			var imageData = ctx.getImageData(0,0,canvas.width,canvas.height);
+			
+			//imageData.data is an 8-bit typed array, values range from 0-255
+			var data = imageData.data;
+			var length = data.length;
+			var width = imageData.width;
+			
+			
+			var brightMod = brightnessModifier - 50;
+			//iterate through each pixel
+			//data[i] is red value
+			//data[i+1] is green value
+			//data[i+2] is blue value
+			//data[i+3] is alpha value
+			for(var i = 0; i < length; i += 4){
+				if(tintRed){
+					data[i] = data[i] + 100;
+				}
+				if(tintGreen){
+					data[i+1] = data[i+1] + 100;
+				}
+				if(tintBlue){
+					data[i+2] = data[i+2] + 100;
+				}
+				
+				
+				data[i] += brightMod;
+				data[i+1] += brightMod;
+				data[i+2] += brightMod;
+			}
+			
+			//reapply the modified value
+			ctx.putImageData(imageData,0,0);
+		}
+		
+		function makeColor(red, green, blue, alpha){
+   			var color='rgba('+red+','+green+','+blue+', '+alpha+')';
+   			return color;
+		}
+		
+		 // FULL SCREEN MODE
+		function requestFullscreen(element) {
+			if (element.requestFullscreen) {
+			  element.requestFullscreen();
+			} else if (element.mozRequestFullscreen) {
+			  element.mozRequestFullscreen();
+			} else if (element.mozRequestFullScreen) { // camel-cased 'S' was changed to 's' in spec
+			  element.mozRequestFullScreen();
+			} else if (element.webkitRequestFullscreen) {
+			  element.webkitRequestFullscreen();
+			}
+			// .. and do nothing if the method is not supported
+		};
+		
+		function getRandom(min, max) {
+				return Math.random() * (max - min) + min;
+		}
+		
+		function randomizeControlPoints(){
+			ctrlModAX = getRandom(-signpostInitialRadius/2, signpostInitialRadius/2);
+			ctrlModAY = getRandom(-signpostInitialRadius/2, signpostInitialRadius/2);
+			ctrlModBX = getRandom(-signpostInitialRadius/2, signpostInitialRadius/2);
+			ctrlModBY = getRandom(-signpostInitialRadius/2, signpostInitialRadius/2);
+		}
+		
+		function getBalancedAverage(pAverageData){
+			if(pAverageData < 90){
+				return 0.00001;
+			}
+			else if(pAverageData > 170){
+				return 1;
+			}
+			else{
+				return (pAverageData - 90)/100;
+			}
+		}
+		
+		// Function Name: getMouse()
+		// returns mouse position in local coordinate system of element
+		// Author: Tony Jefferson
+		// Last update: 3/1/2014
+		function getMouse(e){
+			var mouse = {}
+			mouse.x = e.pageX - e.target.offsetLeft;
+			mouse.y = e.pageY - e.target.offsetTop;
+			return mouse;
+		}
+		
+		function doMousedown(e){
+			var mouse = getMouse(e);
+			signpostFocusX = mouse.x;
+			signpostFocusY = mouse.y;
+		}
+		
+	
+		
+		window.addEventListener("load",init);
+	}());
+		
+	</script>
+</head>
+<body>
+	
+	<div id="wrapper" width='640'>
+		<header>
+			<h1>Audiowarp Visualizer</h1>
+			<h4>(click the canvas)</h4>
+		</header>
+		<div>
+			<canvas id="canvas" width="640" height="400" ></canvas>
+			<div id="controls">
+				<audio controls loop></audio>
+				<button id="fsButton">Go Full Screen</button>
+				<br>
+				<h3>Player Settings</h3>
+				<label>Track: 
+					<select id="trackSelect" >
+						<option value="media/Heart Beat.mp3" selected>Heart Beat</option>
+						<option value="media/Kinetic Harvest.mp3">Kinectic Harvest</option>
+					</select>
+				</label>
+				<label>Shape: 
+					<select id="shapeSelect" >
+						<option value="circle" selected>Circle</option>
+						<option value="square">Square</option>
+					</select>
+				</label>
+				<label>Audio Mode: 
+					<select id="audioSelect" >
+						<option value="frequency" selected>Frequency</option>
+						<option value="waveform">Waveform</option>
+					</select>
+				</label>
+				<p id="status">???</p>
+				<h3>Color Settings</h3>
+				<div>
+					<span>
+						<input type="checkbox" id="checkboxTintRed">
+						<label>Tint Red |</label>
+					</span>
+					<span>
+						<input type="checkbox" id="checkboxTintGreen">
+						<label>Tint Green |</label>
+					</span>
+					<span>
+						<input type="checkbox" id="checkboxTintBlue">
+						<label>Tint Blue</label>
+					</span>
+				</div>
+				<h3>Visual Elements</h3>
+				<div>
+					<span>
+						<input type="checkbox" checked id="checkboxCurves">
+						<label>Curves |</label>
+					</span>
+					<span>
+						<input type="checkbox" checked id="checkboxLines">
+						<label>Lines |</label>
+					</span>
+					<span>
+						<input type="checkbox" checked id="checkboxPulses">
+						<label>Pulses</label>
+					</span>
+				</div>
+				<h3>Audiovisual Modifiers</h3>
+				<label>Brightness:
+					<input id="brightnessSlider" value="50" type="range" name="radius" min="0" max="100">
+				</label><br><br>
+				<label>Reverb:
+					<input id="reverbSlider" value="0" type="range" name="radius" min="0" max="50">
+				</label>
+			</div>
+		</div>
+	</div>
+</body>
+</html>
